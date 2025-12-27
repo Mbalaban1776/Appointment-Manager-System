@@ -1,0 +1,372 @@
+// prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Enums
+enum Role {
+  CLIENT
+  STAFF
+  MANAGER
+  ADMIN
+}
+
+enum ResourceType {
+  PERSONNEL
+  EQUIPMENT
+}
+
+enum ResourceStatus {
+  AVAILABLE
+  UNAVAILABLE
+  MAINTENANCE
+}
+
+enum ScheduleType {
+  SHIFT
+  BREAK
+  TIME_OFF
+  MAINTENANCE
+}
+
+enum AppointmentStatus {
+  PENDING
+  CONFIRMED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+  NO_SHOW
+}
+
+enum RecurringFrequency {
+  DAILY
+  WEEKLY
+  MONTHLY
+}
+
+enum NotificationType {
+  CONFIRMATION
+  REMINDER
+  CANCELLATION
+  RESCHEDULE
+  NO_SHOW
+}
+
+enum NotificationChannel {
+  EMAIL
+  SMS
+  PUSH
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  DELIVERED
+  FAILED
+}
+
+enum WaitlistStatus {
+  ACTIVE
+  NOTIFIED
+  CANCELLED
+}
+
+// Models
+
+model User {
+  id          String   @id @default(uuid())
+  email       String   @unique
+  password    String
+  firstName   String   @map("first_name")
+  lastName    String   @map("last_name")
+  phoneNumber String?  @map("phone_number")
+  role        Role     @default(CLIENT)
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  personnel     Personnel?
+  client        Client?
+  notifications Notification[]
+  auditLogs     AuditLog[]
+
+  @@map("users")
+}
+
+model Personnel {
+  id             String   @id @default(uuid())
+  userId         String   @unique @map("user_id")
+  employeeId     String   @unique @map("employee_id")
+  qualifications String?  @db.Text
+  hourlyRate     Decimal? @map("hourly_rate") @db.Decimal(10, 2)
+  maxCapacity    Int?     @map("max_capacity")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  resource  Resource? // Personnel is a type of Resource
+  schedules Schedule[]
+
+  @@map("personnel")
+}
+
+model Resource {
+  id        String         @id @default(uuid())
+  name      String
+  type      ResourceType
+  status    ResourceStatus @default(AVAILABLE)
+  isActive  Boolean        @default(true) @map("is_active")
+  createdAt DateTime       @default(now()) @map("created_at")
+  updatedAt DateTime       @updatedAt @map("updated_at")
+
+  // Relations
+  personnelId String?     @unique @map("personnel_id")
+  personnel   Personnel?  @relation(fields: [personnelId], references: [id])
+  equipment   Equipment?
+  schedules   Schedule[]
+  allocations ResourceAllocation[]
+
+  @@map("resources")
+}
+
+model Equipment {
+  id                  String    @id @default(uuid())
+  resourceId          String    @unique @map("resource_id")
+  model               String?
+  serialNumber        String?   @unique @map("serial_number")
+  maintenanceSchedule String?   @map("maintenance_schedule") @db.Text
+  lastMaintenance     DateTime? @map("last_maintenance")
+  nextMaintenance     DateTime? @map("next_maintenance")
+
+  // Relations
+  resource Resource @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+
+  @@map("equipment")
+}
+
+model Schedule {
+  id                String       @id @default(uuid())
+  resourceId        String?      @map("resource_id") // Can belong to general resource
+  personnelId       String?      @map("personnel_id") // Or specifically to personnel
+  date              DateTime     @db.Date
+  startTime         DateTime     @map("start_time") // Using DateTime for time to simplify Prisma handling, though Time exists in PG
+  endTime           DateTime     @map("end_time")
+  type              ScheduleType
+  isRecurring       Boolean      @default(false) @map("is_recurring")
+  recurrencePattern String?      @map("recurrence_pattern")
+  notes             String?      @db.Text
+  createdAt         DateTime     @default(now()) @map("created_at")
+
+  // Relations
+  resource  Resource?  @relation(fields: [resourceId], references: [id])
+  personnel Personnel? @relation(fields: [personnelId], references: [id])
+
+  @@map("schedules")
+}
+
+model Client {
+  id                String   @id @default(uuid())
+  userId            String   @unique @map("user_id")
+  preferences       Json?
+  notes             String?  @db.Text
+  totalAppointments Int      @default(0) @map("total_appointments")
+  lastVisit         DateTime? @map("last_visit")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  user                  User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  appointments          Appointment[]
+  recurringAppointments RecurringAppointment[]
+  waitlistEntries       Waitlist[]
+
+  @@map("clients")
+}
+
+model ServiceCategory {
+  id          String   @id @default(uuid())
+  name        String
+  description String?  @db.Text
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  // Relations
+  services Service[]
+
+  @@map("service_categories")
+}
+
+model Service {
+  id          String   @id @default(uuid())
+  categoryId  String   @map("category_id")
+  name        String
+  description String?  @db.Text
+  duration    Int // minutes
+  price       Decimal  @db.Decimal(10, 2)
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  category             ServiceCategory              @relation(fields: [categoryId], references: [id])
+  appointments         Appointment[]
+  resourceRequirements ServiceResourceRequirement[]
+  recurringAppointments RecurringAppointment[]
+  waitlistEntries      Waitlist[]
+
+  @@map("services")
+}
+
+model ServiceResourceRequirement {
+  id           String       @id @default(uuid())
+  serviceId    String       @map("service_id")
+  resourceType ResourceType @map("resource_type")
+  quantity     Int          @default(1)
+  isExclusive  Boolean      @default(true) @map("is_exclusive")
+  createdAt    DateTime     @default(now()) @map("created_at")
+
+  // Relations
+  service Service @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  @@map("resource_requirements")
+}
+
+model Appointment {
+  id                 String            @id @default(uuid())
+  clientId           String            @map("client_id")
+  serviceId          String            @map("service_id")
+  startDateTime      DateTime          @map("start_date_time")
+  endDateTime        DateTime          @map("end_date_time")
+  status             AppointmentStatus @default(PENDING)
+  notes              String?           @db.Text
+  cancellationReason String?           @map("cancellation_reason") @db.Text
+  cancelledAt        DateTime?         @map("cancelled_at")
+  createdAt          DateTime          @default(now()) @map("created_at")
+  updatedAt          DateTime          @updatedAt @map("updated_at")
+
+  // Relations
+  client        Client               @relation(fields: [clientId], references: [id])
+  service       Service              @relation(fields: [serviceId], references: [id])
+  allocations   ResourceAllocation[]
+  notifications Notification[]
+
+  @@index([startDateTime])
+  @@index([clientId])
+  @@map("appointments")
+}
+
+model ResourceAllocation {
+  id            String   @id @default(uuid())
+  appointmentId String   @map("appointment_id")
+  resourceId    String   @map("resource_id")
+  startTime     DateTime @map("start_time")
+  endTime       DateTime @map("end_time")
+  status        String? // Could be used for finer grain status
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  // Relations
+  appointment Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  resource    Resource    @relation(fields: [resourceId], references: [id])
+
+  @@map("resource_allocations")
+}
+
+model RecurringAppointment {
+  id          String             @id @default(uuid())
+  clientId    String             @map("client_id")
+  serviceId   String             @map("service_id")
+  frequency   RecurringFrequency
+  startDate   DateTime           @map("start_date") @db.Date
+  endDate     DateTime           @map("end_date") @db.Date
+  dayOfWeek   Int                @map("day_of_week") // 0-6
+  time        DateTime           @db.Time // Just the time part
+  isActive    Boolean            @default(true) @map("is_active")
+  createdAt   DateTime           @default(now()) @map("created_at")
+
+  // Relations
+  client  Client  @relation(fields: [clientId], references: [id])
+  service Service @relation(fields: [serviceId], references: [id])
+
+  @@map("recurring_appointments")
+}
+
+model Waitlist {
+  id            String         @id @default(uuid())
+  clientId      String         @map("client_id")
+  serviceId     String         @map("service_id")
+  preferredDate DateTime       @map("preferred_date") @db.Date
+  preferredTime DateTime?      @map("preferred_time") @db.Time
+  priority      Int            @default(0)
+  status        WaitlistStatus @default(ACTIVE)
+  createdAt     DateTime       @default(now()) @map("created_at")
+
+  // Relations
+  client  Client  @relation(fields: [clientId], references: [id])
+  service Service @relation(fields: [serviceId], references: [id])
+
+  @@map("waitlist")
+}
+
+model NotificationTemplate {
+  id        String              @id @default(uuid())
+  type      NotificationType
+  channel   NotificationChannel
+  subject   String
+  body      String              @db.Text
+  variables Json?
+  isActive  Boolean             @default(true) @map("is_active")
+  createdAt DateTime            @default(now()) @map("created_at")
+  updatedAt DateTime            @updatedAt @map("updated_at")
+
+  // Relations
+  notifications Notification[]
+
+  @@map("notification_templates")
+}
+
+model Notification {
+  id            String              @id @default(uuid())
+  recipientId   String              @map("recipient_id")
+  appointmentId String?             @map("appointment_id")
+  templateId    String?             @map("template_id")
+  type          NotificationType
+  channel       NotificationChannel
+  subject       String
+  message       String              @db.Text
+  status        NotificationStatus  @default(PENDING)
+  sentAt        DateTime?           @map("sent_at")
+  deliveredAt   DateTime?           @map("delivered_at")
+  createdAt     DateTime            @default(now()) @map("created_at")
+
+  // Relations
+  recipient   User                  @relation(fields: [recipientId], references: [id])
+  appointment Appointment?          @relation(fields: [appointmentId], references: [id])
+  template    NotificationTemplate? @relation(fields: [templateId], references: [id])
+
+  @@map("notifications")
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  userId     String   @map("user_id")
+  entityType String   @map("entity_type")
+  entityId   String   @map("entity_id")
+  action     String
+  oldValue   Json?    @map("old_value")
+  newValue   Json?    @map("new_value")
+  ipAddress  String?  @map("ip_address")
+  timestamp  DateTime @default(now())
+
+  // Relations
+  user User @relation(fields: [userId], references: [id])
+
+  @@map("audit_logs")
+}
+
