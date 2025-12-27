@@ -1,0 +1,70 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:14-alpine
+    container_name: appointment-postgres
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: appointments_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - appointment-network
+
+  # Redis
+  redis:
+    image: redis:7-alpine
+    container_name: appointment-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - appointment-network
+
+  # Backend API
+  backend:
+    build: ./appointment-backend
+    container_name: appointment-backend
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - DATABASE_URL=postgresql://user:password@postgres:5432/appointments_db?schema=public
+      - REDIS_URL=redis://redis:6379
+      - JWT_SECRET=super-secret-jwt-key-change-me-in-production
+      - JWT_EXPIRES_IN=24h
+      - FRONTEND_WEB_URL=http://localhost
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - appointment-network
+    restart: always
+
+  # Frontend Web App
+  frontend:
+    build: ./appointment-web
+    container_name: appointment-frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    networks:
+      - appointment-network
+    restart: always
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  appointment-network:
+    driver: bridge
+
